@@ -4,9 +4,9 @@
 \alias{sensus.decrypt.bin.files}
 \title{Decrypts Sensus .bin files that were encrypted using asymmetric public/private key encryption.}
 \usage{
-sensus.decrypt.bin.files(data.path, is.directory = TRUE, recursive = TRUE,
-  rsa.private.key.path, rsa.private.key.password = askpass,
-  replace.files = TRUE)
+sensus.decrypt.bin.files(data.path, is.directory = TRUE,
+  recursive = TRUE, rsa.private.key.path,
+  rsa.private.key.password = askpass, replace.files = FALSE)
 }
 \arguments{
 \item{data.path}{Path to Sensus .bin data (either a file or a directory).}
@@ -28,8 +28,7 @@ None
 Decrypts Sensus .bin files that were encrypted using asymmetric public/private key encryption.
 }
 \examples{
-# data.path = system.file("extdata", "example_data", package="SensusR")
-# sensus.decrypt.bin.files(data.path = data.path, 
+# sensus.decrypt.bin.files(data.path = "/path/to/bin/files/directory", 
 #                          rsa.private.key.path = "/path/to/private.pem", 
 #                          replace.files = FALSE)
 }
