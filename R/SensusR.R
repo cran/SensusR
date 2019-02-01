@@ -18,7 +18,7 @@ NULL
 #' 
 #' @param profile AWS credentials profile to use for authentication.
 #' @param aws.path Path to AWS client.
-#' 
+#' @return None
 sensus.list.aws.s3.buckets = function(profile = "default", aws.path = "/usr/local/bin/aws")
 {
   aws.args = paste("s3api --profile", profile, "list-buckets --query \"Buckets[].Name\"", sep = " ")
@@ -36,8 +36,6 @@ sensus.list.aws.s3.buckets = function(profile = "default", aws.path = "/usr/loca
 #' @param delete Whether or not to delete local files that are not present in the S3 path.
 #' @param decompress Whether or not to decompress any gzip files after downloading them.
 #' @return Local path to location of downloaded data.
-#' @examples 
-#' # data.path = sensus.sync.from.aws.s3("s3://bucket/path/to/data", local.path = "~/Desktop/data")
 sensus.sync.from.aws.s3 = function(s3.path, profile = "default", local.path = tempfile(), aws.path = "/usr/local/bin/aws", delete = FALSE, decompress = FALSE)
 {
   aws.args = paste("s3 --profile", profile, "sync ", s3.path, local.path, sep = " ")
@@ -66,10 +64,6 @@ sensus.sync.from.aws.s3 = function(s3.path, profile = "default", local.path = te
 #' @param rsa.private.key.password Password used to decrypt the RSA private key.
 #' @param replace.files Whether or not to delete .bin files after they have been decrypted.
 #' @return None
-#' @examples
-#' # sensus.decrypt.bin.files(data.path = "/path/to/bin/files/directory", 
-#' #                          rsa.private.key.path = "/path/to/private.pem", 
-#' #                          replace.files = FALSE)
 sensus.decrypt.bin.files = function(data.path, is.directory = TRUE, recursive = TRUE, rsa.private.key.path, rsa.private.key.password = askpass, replace.files = FALSE)
 {
   bin.paths = c(data.path)
@@ -137,9 +131,6 @@ sensus.decrypt.bin.files = function(data.path, is.directory = TRUE, recursive = 
 #' @param overwrite If TRUE and the output file already exists, the file is silently overwritten; otherwise an exception is thrown (unless skip is TRUE).
 #' @param remove If TRUE, the input file is removed afterward, otherwise not.
 #' @return None
-#' @examples 
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' sensus.decompress.gz.files(data.path)
 sensus.decompress.gz.files = function(local.path, skip = TRUE, overwrite = FALSE, remove = FALSE)
 {
   gz.paths = list.files(local.path, recursive = TRUE, full.names = TRUE, include.dirs = FALSE, pattern = "*.gz$")
@@ -157,19 +148,27 @@ sensus.decompress.gz.files = function(local.path, skip = TRUE, overwrite = FALSE
 #' @param data.path Path to Sensus JSON data (either a file or a directory).
 #' @param is.directory Whether or not the path is a directory.
 #' @param recursive Whether or not to read files recursively from directory indicated by path.
-#' @param convert.to.local.timezone Whether or not to convert timestamps to the local timezone.
-#' @param local.timezone If converting timestamps to local timesonze, the local timezone to use.
+#' @param local.timezone The local timezone to convert datum timestamps to, or NULL to leave the timestamps unconverted.
+#' @param data.types Specific data types to read. A full list of data types can be found here:  \url{https://predictive-technology-laboratory.github.io/sensus/api/Sensus.Datum.html}. For example \code{c("AccelerometerDatum", "HeightDatum")} will only read accelerometer and height data. Pass \code{NULL} to read all data types.
 #' @return All data, listed by type.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TRUE, convert.to.local.timezone = TRUE, local.timezone = Sys.timezone())
+#' @examples	
+#' # data.path = system.file("extdata", "example-data", package="SensusR")	
+#' # data = sensus.read.json.files(data.path)
+sensus.read.json.files = function(data.path, 
+                                  is.directory = TRUE, 
+                                  recursive = TRUE,
+                                  local.timezone = Sys.timezone(),
+                                  data.types = NULL)
 {
   paths = c(data.path)
   
   if(is.directory)
   {
     paths = list.files(data.path, recursive = recursive, full.names = TRUE, include.dirs = FALSE, pattern = "*.json$")
+  } else if(!file.exists(paths[1]))
+  {
+    warning(paste("File does not exist: ", path))
+    return(NULL)
   }
   
   num.files = length(paths)
@@ -177,6 +176,9 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
   # keep track of the expected data count, both by type and in total.
   expected.data.cnt.by.type = list()
   expected.total.cnt = 0
+  
+  # keep track of columns observed for each data type
+  data.type.column.type = list()
   
   # process each path
   data = list()
@@ -194,8 +196,66 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
       next
     }
     
-    # read and parse JSON
-    file.text = readChar(path, file.size)
+    # if we're filtering for specific data types, read JSON lines and filter for desired data types.
+    if(length(data.types) > 0)
+    {
+      file.lines = readLines(path, file.size, warn = FALSE)
+      
+      # set up booleans for lines to keep, always keeping first and last lines if they are array brackets.
+      lines.to.keep = rep(FALSE, length(file.lines))
+      lines.to.keep[1] = file.lines[1] == "["
+      lines.to.keep[length(lines.to.keep)] = file.lines[length(file.lines)] == "]"
+      
+      # keep lines of each desired data type
+      for(data.type in data.types)
+      {
+        # example line:  {"$type":"Sensus.Probes.Movement.GyroscopeDatum, SensusAndroid","X":0.00038380140904337168,"Y":0.00050759583245962858,"Z":-4.7261957661248744E-05,"Id":"e7485732-8678-46ee-b458-a1515adf8655","DeviceId":"dae1fdfe91facb68","Timestamp":"2019-01-09T13:08:21.172667+00:00","ProtocolId":"cf54e60f-0461-4234-9548-c8f297117d37","BuildId":"1547004843","ParticipantId":null,"DeviceManufacturer":"Google","DeviceModel":"sailfish","OperatingSystem":"Android P","TaggedEventId":null,"TaggedEventTags":null}
+        lines.with.data.type = grep(pattern = paste("\"\\$type\":\"[^\"]+", data.type, "[^\"]+\"", sep=""), x = file.lines, value = FALSE, fixed = FALSE)
+        lines.to.keep[lines.with.data.type] = TRUE
+      }
+      
+      # subset lines to those that were array brackets or matched one of the desired data types
+      file.lines = file.lines[lines.to.keep]
+      
+      # ensure last line doesn't end with a comma, which will be the case if we filter out the final JSON object in the original array but keep previous ones, which ended with commas.
+      if(length(file.lines) >= 2)
+      {
+        index = length(file.lines) - 1
+        file.lines[index] = sub(",$", "", file.lines[index])
+      }
+      
+      # collapse subsetted lines back to a single string with newlines
+      file.text = paste(file.lines, collapse = "\n")
+    }
+    # otherwise, read all text as is.
+    else
+    {
+      file.text = readChar(path, file.size)
+    }
+    
+    # check for incomplete JSON file. this can happen if the app is killed before it has a chance
+    # to properly close of the JSON array. in such cases, the file will abruptly terminate with
+    # an unclosed JSON array, and the fromJSON call below will fail. detect this condition and fix
+    # up the JSON accordingly.
+    if(!endsWith(file.text, "]"))
+    {
+      # replace the final line, which is incomplete, with a closing square brace to 
+      # complete the JSON array. if the final line is preceded by a comma (as it will 
+      # typically be with one JSON object per line) then also include the comma in the 
+      # text to be replaced. the final result should be a valid JSON array.
+      file.text = sub(",?\n[^\n]*$", "\n]", file.text)
+      
+      warning(paste("File", path, "contained an unclosed JSON array. Trimmed off final line."))
+      
+      # if we somehow failed to fix up the array with our regex substitution, let the
+      # user know and ignore the file.
+      if(!endsWith(file.text, "]"))
+      {
+        warning(paste("Failed to fix path", path, ". Ignoring this file."))
+        next
+      }
+    }
+    
     file.json = jsonlite::fromJSON(file.text)
 
     # skip empty JSON
@@ -204,13 +264,13 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
       next
     }
     
-    # file.json is a list with one entry per column (e.g., for the X coordinates of accelerometer readings). sub-list
-    # the file.json list to include only those columns that are not themselves lists. we column lists in cases like
-    # the survey data, which are currently excluded from this R package.
-    file.json = file.json[sapply(file.json, typeof) != "list"]
-    
-    # add to expected total count of data, which is the length of the Id list entry
+    # add to expected total count of data, which is the length of the Id list column (or any column).
     expected.total.cnt = expected.total.cnt + length(file.json$Id)
+    
+    # file.json is a list with one entry per column (e.g., for the X coordinates of accelerometer readings). sub-list
+    # the file.json list to include only those columns that are not themselves lists. such list columns will be seen
+    # in cases like the survey data, which we currently cannot handle.
+    file.json = file.json[sapply(file.json, typeof) != "list"]
     
     # set datum type and OS columns
     type.os = lapply(file.json$"$type", function(type)
@@ -230,9 +290,13 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
     # remove the original $type column
     file.json$"$type" = NULL
     
+    # remove the original $Anonymized column. not needed. this column was removed from serialization 
+    # in a later version of sensus, but we retain it here for backwards compatibility.
+    file.json$Anonymized = NULL
+    
     # parse timestamps and convert to local time zone if needed
     file.json$Timestamp = strptime(file.json$Timestamp, format = "%Y-%m-%dT%H:%M:%OS", tz="UTC")    
-    if(convert.to.local.timezone)
+    if(!is.null(local.timezone))
     {
       file.json$Timestamp = lubridate::with_tz(file.json$Timestamp, local.timezone)
     }
@@ -240,21 +304,24 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
     # the input files will have JSON objects of different type (e.g., location and acceleration). the resulting file.json variable
     # will a list element for each column across all data types (e.g., latitude and X columns for location and acceleration types).
     # since 1 or more columns for each data type will be specific to that type, these specific columns will have NA values for the
-    # other types (e.g., the X column for location data will be all NAs). the first step in cleaning all of this up is to split
-    # the entries in each column list by type. do this now...
+    # other types (e.g., the X acceleration column for location data will be all NAs). the first step in cleaning all of this up is 
+    # to split the entries in each column list by type. do this now...
     split.file.json = lapply(split(file.json, file.json$Type), function(data.type)
     {
       # the data.type variable is for a specific type (e.g., location data) and it has all columns
       # from all data types. only those columns for location data will have non-NA values. the other
       # columns (e.g., X from acceleration) will be entirely NAs and can be removed. identify these
-      # all-NA columns next.
-      na.elements = sapply(data.type, function(data.type.column)
+      # all-NA columns next. ignore the special case of TaggedEventId columns, which are often all
+      # null within an entire file but should still be retained.
+      column.is.all.nas = sapply(data.type, function(data.type.column)
       {
         return(sum(is.na(data.type.column)) == length(data.type.column))
       })
-      
-      # remove list elements for the current data type that have all NAs.
-      data.type[na.elements] = NULL
+
+      # remove list elements (columns) for the current data type that have all NAs, as this indicates
+      # that the column actually belongs to some other data type. the only exception to this is the
+      # TaggedEventId column, which will typically be all NAs but is a valid column for all data types.
+      data.type[column.is.all.nas & (names(data.type) != "TaggedEventId")] = NULL
       
       return(data.type)
     })
@@ -265,14 +332,13 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
     for(data.type in names(split.file.json))
     {
       # add to data by type, putting each file in its own list entry (we'll merge files later)
-      type = split.file.json[[data.type]]$Type[1]
-      if(is.null(data[[type]]))
+      if(is.null(data[[data.type]]))
       {
-        data[[type]] = list()
+        data[[data.type]] = list()
       }
       
-      data.type.file.num = length(data[[type]]) + 1
-      data[[type]][[data.type.file.num]] = split.file.json[[data.type]]
+      data.type.file.num = length(data[[data.type]]) + 1
+      data[[data.type]][[data.type.file.num]] = split.file.json[[data.type]]
       
       # update expected data counts by type (use number of non-null IDs as basis for counting)
       data.type.curr.cnt = 0
@@ -282,6 +348,30 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
       }
       
       expected.data.cnt.by.type[[data.type]] = data.type.curr.cnt + sum(!is.na(split.file.json[[data.type]]$Id))
+      
+      # keep track of all observed columns/types. we'll use this set of columns/types to initialize
+      # the final data frame. we're tracking them here to guard against files that have different
+      # JSON fields (e.g., due to version upgrades or other strangeness).
+      column.type = sapply(split.file.json[[data.type]], class)
+      for(column in names(column.type))
+      {
+        # the timestamp column has classes that cannot be constructed automatically in 
+        # subsequent code where the lookup is used. ignore it here and manually add it later.
+        if(column == "Timestamp")
+        {
+          next
+        }
+        
+        if(is.null(data.type.column.type[[data.type]]))
+        {
+          data.type.column.type[[data.type]] = list()
+        }
+        
+        if(is.null(data.type.column.type[[data.type]][[column]]))
+        {
+          data.type.column.type[[data.type]][[column]] = column.type[[column]]
+        }
+      }
     }
   }
  
@@ -290,16 +380,21 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
   final.total.cnt = 0
   for(datum.type in names(data))
   { 
+    print(paste("Merging data for type ", datum.type, ".", sep = ""))
+    
     datum.type.data = data[[datum.type]]
     
-    # pre-allocate vectors for each column in data frame
+    # pre-allocate vectors for each column in data frame according to each column's type, using
+    # length equal to the number of rows. by preallocating everything we'll avoid large reallocations
+    # of memory that tend to crash R.
     datum.type.num.rows = sum(sapply(datum.type.data, nrow))
-    datum.type.col.classes = sapply(datum.type.data[[1]], class)
-    datum.type.col.classes[["Timestamp"]] = NULL  # cannot directly create vector with mode POSIXlt
+    datum.type.col.classes = data.type.column.type[[datum.type]]
     datum.type.col.vectors = lapply(datum.type.col.classes, vector, length = datum.type.num.rows)
+    
+    # pre-allocate timestamp vector manually. can't do it the same as above.
     datum.type.col.vectors[["Timestamp"]] = as.POSIXlt(rep(NA, datum.type.num.rows))
     
-    # merge files for current datum.type
+    # merge files for current datum.type into the preallocated vectors
     insert.start.row = 1
     num.files = length(datum.type.data)
     datum.type.col.vectors.names = names(datum.type.col.vectors)
@@ -312,13 +407,15 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
       insert.end.row = insert.start.row + file.data.rows - 1
       for(col.name in datum.type.col.vectors.names)
       {
+        # check whether the current file data actually has the desired column. it might
+        # not due to sensus version changes or other anticipated issues.
         if(col.name %in% colnames(file.data))
         {
           datum.type.col.vectors[[col.name]][insert.start.row:insert.end.row] = file.data[ , col.name]
         }
         else
         {
-          warning(paste("Data file is missing column ", col.name, ". There will be null values in this column.", sep=""))
+          warning(paste("Data file for type ", datum.type, " is missing column ", col.name, ". There will be null values in this column.", sep=""))
         }
       }
       
@@ -384,8 +481,7 @@ sensus.read.json.files = function(data.path, is.directory = TRUE, recursive = TR
 #' Gets unique device IDs within a dataset.
 #'
 #' @param data Data to write, as read using \code{\link{sensus.read.json.files}}.
-#' @return Unique device IDs within the data
-#' 
+#' @return Unique device IDs within the data.
 sensus.get.unique.device.ids = function(data)
 {
   return(unique(unlist(sapply(names(data), function(datum.type) unique(data[[datum.type]]$DeviceId)), use.names = FALSE)))
@@ -396,10 +492,7 @@ sensus.get.unique.device.ids = function(data)
 #' @param data Data to write, as read using \code{\link{sensus.read.json.files}}.
 #' @param directory Directory to write CSV files to. Will be created if it does not exist.
 #' @param file.name.prefix Prefix to add to the generated file names.
-#' @examples 
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' # sensus.write.csv.files(data, directory = "/path/to/directory")
+#' @return None
 sensus.write.csv.files = function(data, directory, file.name.prefix = "")
 {
   dir.create(directory, showWarnings = FALSE)
@@ -415,10 +508,7 @@ sensus.write.csv.files = function(data, directory, file.name.prefix = "")
 #' @param data Data to write, as read using \code{\link{sensus.read.json.files}}.
 #' @param directory Directory to write CSV files to. Will be created if it does not exist.
 #' @param file.name.prefix Prefix to add to the generated file names.
-#' @examples 
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' # sensus.write.csv.files(data, directory = "/path/to/directory")
+#' @return None
 sensus.write.rdata.files = function(data, directory, file.name.prefix = "")
 {
   dir.create(directory, showWarnings = FALSE)
@@ -435,7 +525,7 @@ sensus.write.rdata.files = function(data, directory, file.name.prefix = "")
 #' @param data Data, as returned by \code{\link{sensus.read.json.files}}.
 #' @param phase Phase of activity (Starting, During, Stopping)
 #' @param state State of phase (Active, Inactive, Unknown)
-#' 
+#' @return None
 sensus.list.activities = function(data, phase = "Starting", state = "Active")
 {
   data$ActivityDatum[data$ActivityDatum$Phase == phase & data$ActivityDatum$State == state, ]
@@ -448,10 +538,7 @@ sensus.list.activities = function(data, phase = "Starting", state = "Active")
 #' @param pch Plotting character.
 #' @param type Line type. 
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$AccelerometerDatum)
+#' @return None
 plot.AccelerometerDatum = function(x, pch = ".", type = "l", ...)
 { 
   par(mfrow=c(2,2))
@@ -468,10 +555,7 @@ plot.AccelerometerDatum = function(x, pch = ".", type = "l", ...)
 #' @param pch Plotting character.
 #' @param type Line type. 
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$AltitudeDatum)
+#' @return None
 plot.AltitudeDatum = function(x, pch = ".", type = "l", ...)
 {
   plot.default(x$Timestamp, x$Altitude, main = "Altitude", xlab = "Time", ylab = "Meters", pch = pch, type = type, ...)
@@ -483,14 +567,12 @@ plot.AltitudeDatum = function(x, pch = ".", type = "l", ...)
 #' @param x Battery data.
 #' @param pch Plotting character.
 #' @param type Line type. 
+#' @param main Main title.
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$BatteryDatum)
-plot.BatteryDatum = function(x, pch = ".", type = "l", ...)
+#' @return None
+plot.BatteryDatum = function(x, pch = ".", type = "l", main = "Battery", ...)
 {
-  plot(x$Timestamp, x$Level, main = "Battery", xlab = "Time", ylab = "Level (%)", pch = pch, type = type, ...)
+  plot(x$Timestamp, x$Level, main = main, xlab = "Time", ylab = "Level (%)", pch = pch, type = type, ...)
 }
 
 #' Plot cell tower data.
@@ -498,10 +580,7 @@ plot.BatteryDatum = function(x, pch = ".", type = "l", ...)
 #' @method plot CellTowerDatum
 #' @param x Cell tower data.
 #' @param ... Other plotting arguments.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$CellTowerDatum)
+#' @return None
 plot.CellTowerDatum = function(x, ...)
 {
   freqs = plyr::count(x$CellTower)
@@ -518,10 +597,7 @@ plot.CellTowerDatum = function(x, ...)
 #' @param pch Plotting character.
 #' @param type Line type. 
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$CompassDatum)
+#' @return None
 plot.CompassDatum = function(x, pch = ".", type = "l", ...)
 {
   plot(x$Timestamp, x$Heading, main = "Compass", xlab = "Time", ylab = "Heading", pch = pch, type = type, ...)
@@ -534,10 +610,7 @@ plot.CompassDatum = function(x, pch = ".", type = "l", ...)
 #' @param pch Plotting character.
 #' @param type Line type. 
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$LightDatum)
+#' @return None
 plot.LightDatum = function(x, pch = ".", type = "l", ...)
 {
   plot(x$Timestamp, x$Brightness, main = "Light", xlab = "Time", ylab = "Level", pch = pch, type = type, ...)
@@ -548,10 +621,7 @@ plot.LightDatum = function(x, pch = ".", type = "l", ...)
 #' @method plot LocationDatum
 #' @param x Location data.
 #' @param ... Arguments to pass to plotting routines. This can include two special arguments:  qmap.args (passed to \code{\link{qmap}}) and geom.point.args (passed to \code{\link{geom_point}}).
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' #plot(data$LocationDatum) -- this line of example code does not play nicely with the CRAN servers.
+#' @return None
 plot.LocationDatum = function(x, ...)
 {
   args = list(...)
@@ -594,10 +664,7 @@ plot.LocationDatum = function(x, ...)
 #' @method plot ScreenDatum
 #' @param x Screen data.
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$ScreenDatum)
+#' @return None
 plot.ScreenDatum = function(x, ...)
 {
   plot(x$Timestamp, x$On, main = "Screen", xlab = "Time", ylab = "On/Off", pch=".", type = "l", ...)
@@ -610,10 +677,7 @@ plot.ScreenDatum = function(x, ...)
 #' @param pch Plotting character.
 #' @param type Line type. 
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$SoundDatum)
+#' @return None
 plot.SoundDatum = function(x, pch = ".", type = "l", ...)
 {
   plot(x$Timestamp, x$Decibels, main = "Sound", xlab = "Time", ylab = "Decibels", pch = pch, type = type, ...)
@@ -626,10 +690,7 @@ plot.SoundDatum = function(x, pch = ".", type = "l", ...)
 #' @param pch Plotting character.
 #' @param type Line type. 
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$SpeedDatum)
+#' @return None
 plot.SpeedDatum = function(x, pch = ".", type = "l", ...)
 {
   plot(x$Timestamp, x$KPH, main = "Speed", xlab = "Time", ylab = "KPH", pch = pch, type = type, ...)
@@ -640,10 +701,7 @@ plot.SpeedDatum = function(x, pch = ".", type = "l", ...)
 #' @method plot TelephonyDatum
 #' @param x Telephony data.
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$TelephonyDatum)
+#' @return None
 plot.TelephonyDatum = function(x, ...)
 {
   par(mfrow = c(2,1))
@@ -668,10 +726,7 @@ plot.TelephonyDatum = function(x, ...)
 #' @method plot WlanDatum
 #' @param x WLAN data.
 #' @param ... Other plotting parameters.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(data$WlanDatum)
+#' @return None
 plot.WlanDatum = function(x, ...)
 {
   freqs = plyr::count(x$AccessPointBSSID[x$AccessPointBSSID != ""])
@@ -683,13 +738,8 @@ plot.WlanDatum = function(x, ...)
 
 #' Get timestamp lags for a Sensus data frame.
 #' 
-#' @param data Data to plot lags for (e.g., the result of \code{read.sensus.json}).
+#' @param data Data to plot lags for (e.g., the result of \code{sensus.read.json.files}).
 #' @return List of lags organized by datum type.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' lags = sensus.get.all.timestamp.lags(data)
-#' plot(lags[["AccelerometerDatum"]])
 sensus.get.all.timestamp.lags = function(data)
 {
   lags = list()
@@ -707,12 +757,8 @@ sensus.get.all.timestamp.lags = function(data)
 
 #' Get timestamp lags for a Sensus datum.
 #' 
-#' @param datum One element of a Sensus data frame (e.g., data$CompassDatum).
+#' @param datum Data to plot lags for (e.g., the result of \code{sensus.read.json.files}).
 #' @return List of lags.
-#' @examples
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' plot(sensus.get.timestamp.lags(data$AccelerometerDatum))
 sensus.get.timestamp.lags = function(datum)
 {
   lags = NULL
@@ -732,10 +778,7 @@ sensus.get.timestamp.lags = function(datum)
 #' @param xlab Label for x-axis.
 #' @param ylab Label for y-axis.
 #' @param main Label for plot.
-#' @examples 
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' sensus.plot.lag.cdf(data$AccelerometerDatum)
+#' @return None.
 sensus.plot.lag.cdf = function(datum, xlim = c(0,1), xlab = "Inter-reading time (seconds)", ylab = "Percentile", main = paste("Inter-reading times (n=", nrow(datum), ")", sep=""))
 {
   lags = diff(datum$Timestamp)
@@ -749,10 +792,6 @@ sensus.plot.lag.cdf = function(datum, xlim = c(0,1), xlab = "Inter-reading time 
 #' @param datum Data collection to process.
 #' @param device.id Device ID to remove.
 #' @return Data without a particular device ID.
-#' @examples 
-#' data.path = system.file("extdata", "example-data", package="SensusR")
-#' data = sensus.read.json.files(data.path)
-#' filtered.data = sensus.remove.device.id(data$AccelerometerDatum, "a448s0df98f")
 sensus.remove.device.id = function(datum, device.id)
 {
   return(datum[datum$DeviceId != device.id, ])
@@ -762,22 +801,16 @@ sensus.remove.device.id = function(datum, device.id)
 #' 
 #' @param x String to trim.
 #' @return Result of trimming.
-#' @examples 
-#' trim.leading("  asdfasdf")
 trim.leading = function (x) sub("^\\s+", "", x)
 
 #' Trim trailing white space from a string.
 #' 
 #' @param x String to trim.
 #' @return Result of trimming.
-#' @examples 
-#' trim.trailing("asdfasdf  ")
 trim.trailing = function (x) sub("\\s+$", "", x)
 
 #' Trim leading and trailing white space from a string.
 #' 
 #' @param x String to trim.
 #' @return Result of trimming.
-#' @examples 
-#' trim("  asdf  ")
 trim = function (x) gsub("^\\s+|\\s+$", "", x)
